@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -12,8 +12,11 @@ import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Settings, Bell, ShieldCheck, Globe, HelpCircle } from "lucide-react";
+import { Settings, Bell, ShieldCheck, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+
+// Use absolute global module aliasing alias to bypass folder nesting depth limits
+import { createClient } from "@/lib/supabase"; 
 
 const siteSettingsSchema = z.object({
   siteName: z.string().min(1, "Site name is required").max(100),
@@ -25,6 +28,10 @@ const siteSettingsSchema = z.object({
 type SiteSettingsFormData = z.infer<typeof siteSettingsSchema>;
 
 export default function AdminSettingsPage() {
+  const supabase = createClient();
+  const [loading, setLoading] = useState(true);
+  
+  // Local state synchronization
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
@@ -41,14 +48,108 @@ export default function AdminSettingsPage() {
     } 
   });
 
-  const onSubmit = async (data: SiteSettingsFormData) => { 
-    toast.success("Global parameters updated successfully."); 
+  // Pull existing live configuration variables on component mount
+  useEffect(() => {
+    async function fetchSystemSettings() {
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("*")
+          .eq("id", "maintenance_config")
+          .single();
+
+        if (error) {
+          // If the row hasn't been instantiated yet, we keep the default UI fallbacks safely
+          console.warn("System settings template fetch status:", error.message);
+          return;
+        }
+
+        if (data) {
+          // Sync React-Hook-Form fields
+          form.reset({
+            siteName: data.site_name || "Prime Esports",
+            siteDescription: data.site_description || "Professional esports organization",
+            contactEmail: data.contact_email || "",
+            discordInviteUrl: data.discord_invite_url || "",
+            twitterUrl: data.twitter_url || "",
+          });
+
+          // Sync atomic switch positions
+          setMaintenanceMode(data.is_maintenance_active ?? false);
+          setRegistrationEnabled(data.is_registration_enabled ?? true);
+          setEmailNotifications(data.is_email_notifications_enabled ?? true);
+          setAutoApproveApplications(data.is_auto_approve_scrim_enabled ?? false);
+        }
+      } catch (err) {
+        console.error("Critical failure during telemetry lookup: ", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchSystemSettings();
+  }, [supabase, form]);
+
+  // Handle Form Submission for metadata targets
+  const onSubmit = async (formData: SiteSettingsFormData) => { 
+    const loadingToast = toast.loading("Synchronizing core deployment fields...");
+    
+    const { error } = await supabase
+      .from("system_settings")
+      .update({
+        site_name: formData.siteName,
+        site_description: formData.siteDescription,
+        contact_email: formData.contactEmail,
+        discord_invite_url: formData.discordInviteUrl,
+        twitter_url: formData.twitterUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", "maintenance_config");
+
+    toast.dismiss(loadingToast);
+
+    if (error) {
+      toast.error(`Parameter syncing failed: ${error.message}`);
+    } else {
+      toast.success("Global parameters updated successfully."); 
+    }
   };
   
-  const handleToggleChange = (setting: string, value: boolean, setter: (v: boolean) => void) => { 
+  // Handle Toggle Shifts for atomic columns
+  const handleToggleChange = async (
+    settingName: string, 
+    value: boolean, 
+    setter: (v: boolean) => void,
+    dbColumn: string
+  ) => { 
+    // Optimistic UI state adjustment
     setter(value); 
-    toast.success(`${setting} has been ${value ? "activated" : "deactivated"}.`); 
+
+    const { error } = await supabase
+      .from("system_settings")
+      .update({ 
+        [dbColumn]: value,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", "maintenance_config");
+
+    if (error) {
+      // Revert state on network drop or authorization rejection
+      setter(!value);
+      toast.error(`Database synchronization error: ${error.message}`);
+    } else {
+      toast.success(`${settingName} has been ${value ? "activated" : "deactivated"}.`); 
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-[400px] w-full flex flex-col items-center justify-center space-y-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="font-mono text-[10px] uppercase tracking-widest text-void-400">Fetching live matrix status...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 pb-16 text-foreground">
@@ -183,7 +284,7 @@ export default function AdminSettingsPage() {
                   <Label className="text-xs font-display font-bold uppercase tracking-wide text-white">Maintenance Intercept Mode</Label>
                   <p className="text-[10px] text-void-400 font-mono uppercase tracking-wide">Sever public client viewing streams temporarily for patch application.</p>
                 </div>
-                <Switch checked={maintenanceMode} onCheckedChange={(v) => handleToggleChange("Maintenance Mode", v, setMaintenanceMode)} className="data-[state=checked]:bg-primary" />
+                <Switch checked={maintenanceMode} onCheckedChange={(v) => handleToggleChange("Maintenance Mode", v, setMaintenanceMode, "is_maintenance_active")} className="data-[state=checked]:bg-primary" />
               </div>
               
               <div className="flex items-center justify-between p-4 bg-void-900/50 border border-border/80 rounded-xl transition-all hover:border-void-800">
@@ -191,7 +292,7 @@ export default function AdminSettingsPage() {
                   <Label className="text-xs font-display font-bold uppercase tracking-wide text-white">User Registry Pipeline</Label>
                   <p className="text-[10px] text-void-400 font-mono uppercase tracking-wide">Enable or isolate global registration boundaries for incoming profiles.</p>
                 </div>
-                <Switch checked={registrationEnabled} onCheckedChange={(v) => handleToggleChange("User Registration", v, setRegistrationEnabled)} className="data-[state=checked]:bg-primary" />
+                <Switch checked={registrationEnabled} onCheckedChange={(v) => handleToggleChange("User Registration", v, setRegistrationEnabled, "is_registration_enabled")} className="data-[state=checked]:bg-primary" />
               </div>
               
               <div className="flex items-center justify-between p-4 bg-void-900/50 border border-border/80 rounded-xl transition-all hover:border-void-800">
@@ -199,7 +300,7 @@ export default function AdminSettingsPage() {
                   <Label className="text-xs font-display font-bold uppercase tracking-wide text-white">Auto-Approve Scrim Clearance</Label>
                   <p className="text-[10px] text-void-400 font-mono uppercase tracking-wide">Automate verified bracket placements skipping human operations reviews.</p>
                 </div>
-                <Switch checked={autoApproveApplications} onCheckedChange={(v) => handleToggleChange("Auto-Approve Applications", v, setAutoApproveApplications)} className="data-[state=checked]:bg-primary" />
+                <Switch checked={autoApproveApplications} onCheckedChange={(v) => handleToggleChange("Auto-Approve Applications", v, setAutoApproveApplications, "is_auto_approve_scrim_enabled")} className="data-[state=checked]:bg-primary" />
               </div>
             </CardContent>
           </Card>
@@ -221,7 +322,7 @@ export default function AdminSettingsPage() {
                   <Label className="text-xs font-display font-bold uppercase tracking-wide text-white">Email Dispatch Alerts</Label>
                   <p className="text-[10px] text-void-400 font-mono uppercase tracking-wide">Forward complete raw metadata packets via standard email relays upon new system applications.</p>
                 </div>
-                <Switch checked={emailNotifications} onCheckedChange={(v) => handleToggleChange("Email Notifications", v, setEmailNotifications)} className="data-[state=checked]:bg-primary" />
+                <Switch checked={emailNotifications} onCheckedChange={(v) => handleToggleChange("Email Notifications", v, setEmailNotifications, "is_email_notifications_enabled")} className="data-[state=checked]:bg-primary" />
               </div>
             </CardContent>
           </Card>
