@@ -5,8 +5,12 @@ import { Shield, Terminal, Eye, EyeOff, ChevronRight, MailCheck } from "lucide-r
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/AuthContext";
-import { supabase } from "@/lib/supabase";
+// Fixes the default export compilation error by importing the explicit named factory function
+import { createClient } from "@/lib/supabase";
 import { toast } from "sonner";
+
+// Initialize the client safely outside the component instance lifecycle
+const supabase = createClient();
 
 export default function SignupPage() {
   const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "", discord: "" });
@@ -22,13 +26,28 @@ export default function SignupPage() {
     if (form.password !== form.confirmPassword) { toast.error("Passwords don't match"); return; }
     if (form.password.length < 8) { toast.error("Password must be at least 8 characters"); return; }
     setLoading(true);
-    const { error } = await signUp(form.email, form.password, form.username, form.discord || undefined);
-    if (error) {
-      toast.error(error.message);
+    
+    // Call the custom wrapper routine from the Auth context
+    const result = await signUp(form.email, form.password, form.username, form.discord || undefined);
+    
+    if (result && result.error) {
+      toast.error(result.error.message);
     } else {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from("players").insert([{ id: user.id, username: form.username, email: form.email, discord_tag: form.discord || null }]);
+      try {
+        // Query the authentication state instance directly to fetch the user properties reliably
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        
+        if (authUser) {
+          const { error: insertError } = await supabase
+            .from("players")
+            .insert([{ id: authUser.id, username: form.username, email: form.email, discord_tag: form.discord || null }]);
+          
+          if (insertError) {
+            console.error("Profile sync failed:", insertError.message);
+          }
+        }
+      } catch (profileErr: any) {
+        console.error("Error creating profile mapping table row:", profileErr.message);
       }
       setSubmitted(true);
     }
