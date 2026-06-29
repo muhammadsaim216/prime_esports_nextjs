@@ -5,10 +5,14 @@ import { ArrowRight, Trophy, Users, ChevronLeft, ChevronRight, Globe, Shield, Za
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { supabase } from "@/lib/supabase";
+// Fixed: Swapped out named instance import for the factory function to match your schema setup
+import { createClient } from "@/lib/supabase";
 import AnnouncementTicker from "@/components/layout/AnnouncementTicker";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
+
+// Initialize the client instance securely outside the component render tree
+const supabase = createClient();
 
 const SLIDER_IMAGES = [
   "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=800&q=80",
@@ -33,7 +37,7 @@ export default function Home() {
       if (teamsData) setTeams(teamsData.map((t: any) => ({ ...t, player_count: t.players?.length || 0 })));
       if (achievementsData) setAchievements(achievementsData.map((a: any) => ({ id: a.id, title: a.title, year: a.year, team_name: a.teams?.name, game: a.teams?.game })));
       if (sponsorsData) setSponsors(sponsorsData);
-      setLoading(false);
+      loading && setLoading(false);
     };
     fetchData();
     const timer = setInterval(() => setCurrentSlide((p) => (p + 1) % SLIDER_IMAGES.length), 5000);
